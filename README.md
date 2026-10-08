@@ -25,6 +25,12 @@ DR-TBAtlas is a web-based genomic explorer for *Mycobacterium tuberculosis*, des
   - Search from the browser's own location box by gene name, locus tag, product word or catalogue variant (`katG_p.Ser315Thr`)
   - JBrowse's built-in tools: track selector, motif search, SVG export, horizontal flip and region sequence retrieval
 - **Drug Resistance Profiles**: The full WHO catalogue schema — mutation, tier, final confidence grading, effect, comment, `CHANGES vs ver1`, relaxed-thresholds simulation and silent-mutation flag, with a column-visibility control
+- **Mutation Filters**: A labelled filter panel above the resistance tables:
+  - Free-text mutation search in one- or three-letter notation (`S450L` or `Ser450Leu`), by position (`450`) or with several terms at once
+  - Drop-down lists for drug, confidence grading (with quick picks), effect, mutation type, change vs catalogue v1 and gene tier, each listing only the values present for the gene, with counts
+  - A codon/nucleotide position range, e.g. the rpoB RRDR (codons 426–452)
+  - Switches for WHO comments, the relaxed-thresholds simulation and silent mutations
+  - Coordinates table filters by variant, genomic position and change type, optionally linked to the resistance filters
 - **Coordinate Calculator**: Automatically convert between:
   - Genomic coordinates (absolute position on chromosome)
   - Gene-relative coordinates (c. notation, e.g., c.102G>A)

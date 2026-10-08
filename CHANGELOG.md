@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-08
+
+### Added
+- **Mutation filters for the Drug Resistance Profile.** A filter panel above
+  the drug tables replaces the per-column filter row, which expected query
+  syntax typed into an unlabelled cell. It offers:
+  - a *Find mutation* box that accepts one- or three-letter residues
+    (`S450L`, `Ser450Leu`), a whole codon or nucleotide position (`450`),
+    nucleotide changes (`c.-15C>T`), consequences (`fs`, `LoF`) and several
+    terms separated by commas;
+  - drop-down lists for drug and confidence grading, with quick picks for
+    associated (1–2), uncertain (3) and not associated (4–5);
+  - under *More filters*: effect, mutation type (p., c., n., gene-level),
+    change vs catalogue v1, gene tier, a codon/nucleotide position range and
+    switches for WHO comments, the relaxed-thresholds simulation and silent
+    mutations.
+  Every option lists only the values present for the active gene, with their
+  counts. Filters apply to all drug tables at once; drugs left with no match
+  are hidden, each drug's badge reads "n of N mutations", a summary line
+  states what is shown, and *Clear filters* resets everything. The *More
+  filters* button shows how many hidden filters are active.
+- **Genomic Coordinates filters**: search by variant or genomic position, a
+  change-type list (SNV, insertion, deletion, MNV) and a switch that limits
+  the table to the variants left by the Drug Resistance Profile filters.
+
+### Changed
+- The Catalogue Summary tables keep their per-column filter row, now
+  case-insensitive and labelled "Filter…".
+
 ## [1.4.0] - 2026-10-06
 
 ### Added

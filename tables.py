@@ -13,6 +13,7 @@ from dash import dash_table, dcc, html
 import dash_bootstrap_components as dbc
 
 from data_utils import CONFIDENCE_GRADES, RELAXED_THRESHOLDS_COLUMN, GeneInfo
+from mutation_filters import change_kind
 
 # Longest sequence rendered inline in a table cell before truncation.
 SEQ_DISPLAY_CHARS = 28
@@ -226,7 +227,6 @@ def create_drug_detail_table(
         data=prepared.to_dict("records"),
         columns=build_resistance_columns(visible_columns),
         cell_selectable=True,
-        filter_action="native",
         sort_action="native",
         page_size=page_size,
         page_current=page_of_mutation(prepared, selected_mutation, page_size),
@@ -320,6 +320,9 @@ def prepare_coordinates_data(
     display["Change"] = [
         _describe_change(ref, alt) for ref, alt in zip(reference, alternative)
     ]
+    display["change_kind"] = [
+        change_kind(ref, alt) for ref, alt in zip(reference, alternative)
+    ]
     return display
 
 
@@ -387,24 +390,14 @@ def create_genomic_coords_table(
         {"name": "Gene Relative", "id": "Gene Relative"},
     ]
 
-    tooltip_data = []
-    for _, row in display.iterrows():
-        tooltip = {}
-        for column, source in (("ref_display", "reference_nucleotide"), ("alt_display", "alternative_nucleotide")):
-            hint = _sequence_tooltip(row.get(source, ""))
-            if hint:
-                tooltip[column] = hint
-        tooltip_data.append(tooltip)
-
     table = dash_table.DataTable(
         id=dict(COORDS_TABLE_ID),
         data=display.to_dict("records"),
         columns=columns,
         cell_selectable=True,
-        filter_action="native",
         sort_action="native",
         page_size=COORDINATES_PAGE_SIZE,
-        page_current=_page_of_variant(display, selected_variant),
+        page_current=page_of_variant(display, selected_variant),
         style_table={"overflowX": "auto", "minWidth": "100%"},
         style_cell=_BASE_CELL_STYLE,
         style_header=_BASE_HEADER_STYLE,
@@ -416,7 +409,7 @@ def create_genomic_coords_table(
             {"if": {"column_id": "alt_display"}, "minWidth": "150px", "maxWidth": "240px"},
             {"if": {"column_id": "Change"}, "minWidth": "130px"},
         ],
-        tooltip_data=tooltip_data,
+        tooltip_data=coordinates_tooltips(display),
         tooltip_delay=200,
         tooltip_duration=None,
         css=_SELECTABLE_CSS,
@@ -425,7 +418,20 @@ def create_genomic_coords_table(
     return html.Div(table, className="dash-table-container table-responsive-container")
 
 
-def _page_of_variant(display: pd.DataFrame, variant: Optional[str]) -> int:
+def coordinates_tooltips(display: pd.DataFrame) -> List[Dict]:
+    """Full-allele hover tooltips, one per row of ``display``."""
+    tooltip_data = []
+    for _, row in display.iterrows():
+        tooltip = {}
+        for column, source in (("ref_display", "reference_nucleotide"), ("alt_display", "alternative_nucleotide")):
+            hint = _sequence_tooltip(row.get(source, ""))
+            if hint:
+                tooltip[column] = hint
+        tooltip_data.append(tooltip)
+    return tooltip_data
+
+
+def page_of_variant(display: pd.DataFrame, variant: Optional[str]) -> int:
     """Page index holding the first row for a variant."""
     if not variant or display.empty:
         return 0
@@ -497,6 +503,7 @@ def _summary_table(table_id: str, summary: pd.DataFrame, label_column: str) -> d
         columns=columns,
         sort_action="native",
         filter_action="native",
+        filter_options={"case": "insensitive", "placeholder_text": "Filter…"},
         page_action="none",
         fixed_rows={"headers": True},
         style_table={"overflowX": "auto", "maxHeight": "58vh", "overflowY": "auto"},
