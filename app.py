@@ -2,6 +2,7 @@
 DR-TBAtlas - A Dash application for visualizing TB genomic data and drug resistance.
 """
 import os
+from functools import lru_cache
 from typing import Dict, List, Optional
 
 import dash
@@ -14,6 +15,7 @@ from flask import send_from_directory
 import browser_tracks
 import genome_view
 import layout as ui
+import mutation_filters as mf
 import search_utils
 import tables
 from coordinate_calculator import CoordinateCalculator
@@ -290,11 +292,16 @@ def render_gene(nav: Optional[Dict]):
 
     drug_resistance = data_loader.get_drug_resistance_info(gene_info.locus_tag)
     if len(drug_resistance) > 0:
-        results.append(_resistance_card(drug_resistance, requested_mutation))
+        results.append(_resistance_card(
+            drug_resistance, gene_info.locus_tag, requested_mutation
+        ))
 
     mutations_df = data_loader.search_mutations_by_gene(gene_info.locus_tag)
     if len(mutations_df) > 0:
-        results.append(_coordinates_card(mutations_df, gene_info, selected_variant))
+        results.append(_coordinates_card(
+            mutations_df, gene_info, selected_variant,
+            linkable=len(drug_resistance) > 0,
+        ))
 
     results.append(_analysis_card())
 
@@ -392,8 +399,37 @@ def _overview_field(label: str, value: str, width: int = 3) -> dbc.Col:
     ], md=width, xs=6)
 
 
+@lru_cache(maxsize=8)
+def _prepared_resistance(locus_tag: str) -> Dict[str, pd.DataFrame]:
+    """
+    Prepared resistance rows of a gene, per drug, in table order.
+
+    Cached because every change to the mutation filters re-filters them.
+    Callers must not modify the frames.
+    """
+    drug_resistance = data_loader.get_drug_resistance_info(locus_tag)
+    return {
+        drug: tables.prepare_resistance_data(drug_resistance[drug_resistance["drug"] == drug])
+        for drug in sorted(drug_resistance["drug"].dropna().unique())
+    }
+
+
+@lru_cache(maxsize=8)
+def _prepared_coordinates(locus_tag: str) -> pd.DataFrame:
+    """Prepared Genomic Coordinates rows of a gene; callers must not modify it."""
+    gene_info = data_loader.get_gene_info(locus_tag)
+    mutations_df = data_loader.search_mutations_by_gene(locus_tag)
+    return tables.prepare_coordinates_data(mutations_df, gene_info, coord_calculator)
+
+
+def _drug_count_label(shown: int, total: int) -> str:
+    if shown == total:
+        return f"{total:,} mutations"
+    return f"{shown:,} of {total:,} mutations"
+
+
 def _resistance_card(
-    drug_resistance: pd.DataFrame, selected_mutation: Optional[str]
+    drug_resistance: pd.DataFrame, locus_tag: str, selected_mutation: Optional[str]
 ) -> dbc.Card:
     """Drug Resistance Profile card, one table per drug (TASK-12)."""
     drug_cards = []
@@ -409,7 +445,8 @@ def _resistance_card(
                     dbc.Row([
                         dbc.Col(html.H6(drug, className="mb-0 fw-bold"), width="auto"),
                         dbc.Col(dbc.Badge(
-                            f"{len(drug_data):,} mutations",
+                            _drug_count_label(len(drug_data), len(drug_data)),
+                            id={"type": "drug-count", "index": drug},
                             className="badge-custom ms-2",
                         ), width="auto"),
                         dbc.Col(dbc.Badge(
@@ -427,7 +464,7 @@ def _resistance_card(
                         drug_data, drug, selected_mutation=selected_mutation
                     ),
                 ], className="pt-2"),
-            ], className="mb-3 border-0 shadow-sm")
+            ], id={"type": "drug-card", "index": drug}, className="mb-3 border-0 shadow-sm")
         )
 
     return dbc.Card([
@@ -443,16 +480,30 @@ def _resistance_card(
                 "coordinate analysis below.",
                 className="text-muted small mb-2",
             ),
+            mf.resistance_filter_panel(_prepared_resistance(locus_tag)),
             tables.resistance_column_toggle(),
+            html.Div(
+                mf.no_matches_alert(),
+                id="resistance-filter-empty",
+                style={"display": "none"},
+            ),
             html.Div(drug_cards),
         ]),
     ], className="result-card")
 
 
 def _coordinates_card(
-    mutations_df: pd.DataFrame, gene_info: GeneInfo, selected_variant: Optional[str]
+    mutations_df: pd.DataFrame,
+    gene_info: GeneInfo,
+    selected_variant: Optional[str],
+    linkable: bool = False,
 ) -> dbc.Card:
-    """Genomic Coordinates card (TASK-07)."""
+    """
+    Genomic Coordinates card (TASK-07).
+
+    ``linkable`` offers to restrict the table to the variants left by the Drug
+    Resistance Profile filters, when that card is shown.
+    """
     return dbc.Card([
         dbc.CardHeader([
             dbc.Row([
@@ -472,6 +523,7 @@ def _coordinates_card(
                 "insertion and deletion alleles are shortened — hover a cell to "
                 "read the sequence, or select the row to copy it in full.",
             ], className="text-muted small mb-3"),
+            mf.coordinates_filter_bar(_prepared_coordinates(gene_info.locus_tag), linkable),
             tables.create_genomic_coords_table(
                 mutations_df, gene_info, coord_calculator, selected_variant
             ),
@@ -671,6 +723,166 @@ def toggle_resistance_columns(visible_keys):
     """Show or hide the optional WHO metadata columns (TASK-12.4)."""
     columns = tables.build_resistance_columns(visible_keys)
     return [columns] * len(callback_context.outputs_list)
+
+
+# ----------------------------------------------------------------------
+# Mutation filters
+# ----------------------------------------------------------------------
+@app.callback(
+    [Output("filter-advanced-collapse", "is_open"),
+     Output("filter-advanced-chevron", "className")],
+    Input("filter-advanced-toggle", "n_clicks"),
+    State("filter-advanced-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_advanced_filters(n_clicks, is_open):
+    is_open = not is_open
+    return is_open, f"bi bi-chevron-{'up' if is_open else 'down'} ms-2"
+
+
+_GRADE_PRESETS = {
+    "filter-preset-associated": mf.ASSOCIATED_GRADES,
+    "filter-preset-uncertain": mf.UNCERTAIN_GRADES,
+    "filter-preset-not-associated": mf.NOT_ASSOCIATED_GRADES,
+}
+
+
+@app.callback(
+    Output({"type": mf.RESISTANCE_FILTER, "field": ALL}, "value"),
+    [Input("filter-clear", "n_clicks"),
+     *[Input(button, "n_clicks") for button in _GRADE_PRESETS]],
+    State({"type": mf.RESISTANCE_FILTER, "field": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def reset_or_preset_filters(clear_clicks, *args):
+    """Clear every filter, or set the confidence grading to a quick pick."""
+    current = args[-1]
+    triggered = callback_context.triggered_id
+    if not _triggered_click_value():
+        raise PreventUpdate
+
+    fields = [item["id"]["field"] for item in callback_context.outputs_list]
+    if triggered == "filter-clear":
+        return [mf.RESISTANCE_DEFAULTS[field] for field in fields]
+
+    grades = _GRADE_PRESETS[triggered]
+    return [
+        list(grades) if field == "grades" else value
+        for field, value in zip(fields, current)
+    ]
+
+
+@app.callback(
+    [Output({"type": "drug-table", "index": ALL}, "data"),
+     Output({"type": "drug-table", "index": ALL}, "page_current", allow_duplicate=True),
+     Output({"type": "drug-table", "index": ALL}, "active_cell"),
+     Output({"type": "drug-table", "index": ALL}, "selected_cells"),
+     Output({"type": "drug-card", "index": ALL}, "style"),
+     Output({"type": "drug-count", "index": ALL}, "children"),
+     Output("resistance-filter-summary", "children"),
+     Output("resistance-filter-empty", "style"),
+     Output("filter-clear", "disabled"),
+     Output("filter-advanced-count", "children"),
+     Output("filter-advanced-count", "style")],
+    Input({"type": mf.RESISTANCE_FILTER, "field": ALL}, "value"),
+    [State("current-gene-store", "data"),
+     State("selection-store", "data")],
+    prevent_initial_call=True,
+)
+def apply_resistance_filters(values, gene_data, selection):
+    """Filter every drug table of the Drug Resistance Profile at once."""
+    if not gene_data:
+        raise PreventUpdate
+
+    filters = mf.collect(callback_context.inputs_list[0], mf.RESISTANCE_DEFAULTS)
+    prepared = _prepared_resistance(gene_data["locus_tag"])
+    filtered = mf.filter_by_drug(prepared, filters)
+    mutation = (selection or {}).get("mutation")
+
+    table_ids = [item["id"]["index"] for item in callback_context.outputs_list[0]]
+    card_ids = [item["id"]["index"] for item in callback_context.outputs_list[4]]
+    count_ids = [item["id"]["index"] for item in callback_context.outputs_list[5]]
+    empty = pd.DataFrame(columns=["mutation"])
+
+    datas, pages = [], []
+    for drug in table_ids:
+        rows = filtered.get(drug, empty)
+        datas.append(rows.to_dict("records"))
+        pages.append(tables.page_of_mutation(rows, mutation))
+
+    shown = sum(len(rows) for rows in filtered.values())
+    total = sum(len(rows) for rows in prepared.values())
+    drugs_shown = sum(1 for rows in filtered.values() if len(rows))
+    active = mf.is_filtered(filters)
+    advanced = mf.advanced_count(filters)
+
+    return (
+        datas,
+        pages,
+        [None] * len(table_ids),
+        [[]] * len(table_ids),
+        [{"display": "block" if len(filtered.get(drug, empty)) else "none"} for drug in card_ids],
+        [_drug_count_label(len(filtered.get(drug, empty)), len(prepared.get(drug, empty)))
+         for drug in count_ids],
+        mf.resistance_summary(shown, total, drugs_shown, len(prepared), active),
+        {"display": "none" if shown else "block"},
+        not active,
+        str(advanced),
+        {"display": "inline-block" if advanced else "none"},
+    )
+
+
+@app.callback(
+    [Output(dict(tables.COORDS_TABLE_ID, index=ALL), "data"),
+     Output(dict(tables.COORDS_TABLE_ID, index=ALL), "tooltip_data"),
+     Output(dict(tables.COORDS_TABLE_ID, index=ALL), "page_current", allow_duplicate=True),
+     Output(dict(tables.COORDS_TABLE_ID, index=ALL), "active_cell"),
+     Output(dict(tables.COORDS_TABLE_ID, index=ALL), "selected_cells"),
+     Output(dict(mf.COORDS_FILTER_SUMMARY_ID, index=ALL), "children")],
+    [Input({"type": mf.COORDS_FILTER, "field": ALL}, "value"),
+     Input({"type": mf.RESISTANCE_FILTER, "field": ALL}, "value")],
+    [State("current-gene-store", "data"),
+     State("selection-store", "data")],
+    prevent_initial_call=True,
+)
+def apply_coordinate_filters(coords_values, resistance_values, gene_data, selection):
+    """
+    Filter the Genomic Coordinates table, optionally to the variants left by
+    the Drug Resistance Profile filters.
+    """
+    tables_count = len(callback_context.outputs_list[0])
+    if not gene_data or not tables_count:
+        raise PreventUpdate
+
+    filters = mf.collect(callback_context.inputs_list[0], mf.COORDS_DEFAULTS)
+    linked = "linked" in (filters.get("linked") or [])
+    triggered = callback_context.triggered_id
+    if isinstance(triggered, dict) and triggered.get("type") == mf.RESISTANCE_FILTER and not linked:
+        raise PreventUpdate
+
+    variants = None
+    if linked:
+        resistance_filters = mf.collect(callback_context.inputs_list[1], mf.RESISTANCE_DEFAULTS)
+        filtered = mf.filter_by_drug(_prepared_resistance(gene_data["locus_tag"]), resistance_filters)
+        variants = {
+            variant for rows in filtered.values() for variant in rows.get("variant", [])
+        }
+
+    display = _prepared_coordinates(gene_data["locus_tag"])
+    rows = mf.filter_coordinates(display, filters, variants)
+    page = tables.page_of_variant(rows, (selection or {}).get("variant"))
+    summary = mf.coordinates_summary(
+        len(rows), len(display), linked or mf.is_filtered(filters, mf.COORDS_DEFAULTS)
+    )
+
+    return (
+        [rows.to_dict("records")] * tables_count,
+        [tables.coordinates_tooltips(rows)] * tables_count,
+        [page] * tables_count,
+        [None] * tables_count,
+        [[]] * tables_count,
+        [summary] * len(callback_context.outputs_list[5]),
+    )
 
 
 @app.callback(
