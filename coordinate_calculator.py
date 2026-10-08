@@ -2,6 +2,7 @@
 Coordinate calculator for converting between gene-relative and genomic positions.
 This utility bridges the gap between the catalogue master file and genomic coordinates.
 """
+import os
 import re
 from typing import Dict, List, Optional
 
@@ -21,17 +22,49 @@ class CoordinateCalculator:
     
     def __init__(self, data_loader: DataLoader):
         self.data_loader = data_loader
+        self._chromosome_length: Optional[int] = None
+        self._chromosome_length_read = False
+    
+    def chromosome_length(self) -> Optional[int]:
+        """Length of the chromosome, read once from the FASTA index."""
+        if not self._chromosome_length_read:
+            self._chromosome_length_read = True
+            fai_path = getattr(self.data_loader, "fai_path", None)
+            if fai_path and os.path.exists(fai_path):
+                with open(fai_path) as handle:
+                    fields = handle.readline().split("\t")
+                if len(fields) > 1 and fields[1].isdigit():
+                    self._chromosome_length = int(fields[1])
+        return self._chromosome_length
+    
+    def _shortest_offset(self, offset: int) -> int:
+        """
+        The chromosome is circular: dnaA starts at position 1, so its upstream
+        region lies at the end of the sequence. Measure the offset the short
+        way round the circle.
+        """
+        length = self.chromosome_length()
+        if length:
+            if offset > length // 2:
+                offset -= length
+            elif offset < -(length // 2):
+                offset += length
+        return offset
     
     def calculate_relative_position(self, genomic_position: int, gene_info: GeneInfo) -> int:
         """
-        Calculate position relative to gene start.
+        Calculate the HGVS c. position of a genomic position.
         For + strand: relative_pos = genomic_pos - gene_start + 1
         For - strand: relative_pos = gene_end - genomic_position + 1
+        Upstream of the gene the + 1 is dropped, because HGVS has no c.0:
+        the base just before c.1 is c.-1.
         """
         if gene_info.strand == '+':
-            return genomic_position - gene_info.start + 1
+            offset = genomic_position - gene_info.start
         else:
-            return gene_info.end - genomic_position + 1
+            offset = gene_info.end - genomic_position
+        offset = self._shortest_offset(offset)
+        return offset + 1 if offset >= 0 else offset
     
     def parse_c_dot_notation(self, c_dot: str) -> Optional[int]:
         """
@@ -94,21 +127,18 @@ class CoordinateCalculator:
             Genomic position (1-based)
         """
         rel_pos = self.parse_c_dot_notation(c_dot)
-        if rel_pos is None:
+        if rel_pos is None or rel_pos == 0:
             return None
         
-        # For upstream variants (negative positions)
-        if rel_pos < 0:
-            if gene_info.strand == '+':
-                return gene_info.start + rel_pos - 1
-            else:
-                return gene_info.end - rel_pos + 1
-        
-        # For coding region variants
+        # Upstream variants (negative positions) have no c.0 to skip over,
+        # so their offset from c.1 is the position itself.
+        offset = rel_pos - 1 if rel_pos > 0 else rel_pos
         if gene_info.strand == '+':
-            return gene_info.start + rel_pos - 1
+            position = gene_info.start + offset
         else:
-            return gene_info.end - rel_pos + 1
+            position = gene_info.end - offset
+        length = self.chromosome_length()
+        return (position - 1) % length + 1 if length else position
     
     def calculate_c_dot_from_genomic(
         self,
@@ -125,10 +155,7 @@ class CoordinateCalculator:
         Returns:
             Relative nucleotide position (c. notation number)
         """
-        if gene_info.strand == '+':
-            return genomic_position - gene_info.start + 1
-        else:
-            return gene_info.end - genomic_position + 1
+        return self.calculate_relative_position(genomic_position, gene_info)
     
     def calculate_full_coordinates(
         self,
@@ -178,7 +205,10 @@ class CoordinateCalculator:
             if rel_pos is not None:
                 genomic_pos = self.calculate_genomic_from_c_dot(mutation, gene_info)
                 result["genomic_position"] = genomic_pos
-                result["amino_acid_position"] = self.nucleotide_to_amino_acid_position(abs(rel_pos))
+                # Upstream positions lie outside the coding sequence: no codon.
+                result["amino_acid_position"] = (
+                    self.nucleotide_to_amino_acid_position(rel_pos) if rel_pos > 0 else None
+                )
         
         # Handle p. notation
         elif mutation.startswith('p.'):

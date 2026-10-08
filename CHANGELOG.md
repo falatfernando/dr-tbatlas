@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-10-08
+
+### Fixed
+- **Upstream c. positions were off by one.** HGVS has no c.0, so the base
+  just before c.1 is c.-1, but the coordinate calculator counted it as c.0:
+  every upstream variant in the Genomic Coordinates table and the Coordinate
+  Analysis panel read one position too high (`katG_c.-1T>C` showed as
+  `c.0`, `fabG1_c.-15C>T` as `c.-14`), and c. → genomic conversion was off by
+  one in the other direction. The derivation text now shows the upstream
+  formula.
+- Upstream positions of dnaA, which starts at position 1, wrap round the
+  circular chromosome instead of being reported as c.4411221 and so on.
+- Upstream c. variants no longer report an amino acid position.
+
+### Added
+- Coordinate calculator tests on both strands, around c.1, across the
+  chromosome origin, and against every single-base c. variant in the WHO
+  genomic coordinates file (11,587 changes).
+
 ## [1.5.0] - 2026-10-08
 
 ### Added

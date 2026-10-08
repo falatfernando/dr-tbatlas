@@ -13,7 +13,7 @@ authors:
   - given-names: Ana Marcia de Sá
     family-names: Guimarães
     affiliation: "Laboratory of Applied Research in Mycobacteria (LaPAM), University of São Paulo"
-version: 1.5.0
+version: 1.5.1
 date-released: "2026-10-08"
 doi: 10.5281/zenodo.21035590
 license: GPL-3.0-only

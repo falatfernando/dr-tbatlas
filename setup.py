@@ -5,7 +5,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="dr-tbatlas",
-    version="1.5.0",
+    version="1.5.1",
     author="Fernando Falat",
     author_email="fernandofalat@proton.me",
     description="A web-based genomic explorer for Mycobacterium tuberculosis drug resistance mutations using the WHO catalogue.",
