@@ -1238,18 +1238,23 @@ def _derivation_text(gene_data: Dict, position: Optional[int], relative: Optiona
     start = gene_data["start"]
     end = gene_data["end"]
 
+    # HGVS has no c.0, so upstream positions drop the + 1.
+    upstream = relative is not None and relative < 0
+    plus_one = "" if upstream else " + 1"
     if strand == "+":
-        formula = "c. position = genomic - gene_start + 1"
+        formula = "c. position = genomic - gene_start" + plus_one
         calculation = (
-            "{:,} - {:,} + 1 = {}".format(position, start, relative)
+            "{:,} - {:,}{} = {}".format(position, start, plus_one, relative)
             if position and relative is not None else "n/a"
         )
     else:
-        formula = "c. position = gene_end - genomic + 1"
+        formula = "c. position = gene_end - genomic" + plus_one
         calculation = (
-            "{:,} - {:,} + 1 = {}".format(end, position, relative)
+            "{:,} - {:,}{} = {}".format(end, position, plus_one, relative)
             if position and relative is not None else "n/a"
         )
+    if upstream:
+        formula += "\n(upstream of the gene: HGVS has no c.0, so c.-1 is the base before c.1)"
 
     return (
         "Gene: {} ({})\n"

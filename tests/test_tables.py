@@ -162,6 +162,17 @@ def test_relative_positions_are_computed_for_the_reverse_strand(loader, calculat
     assert row["Gene Relative"] == f"c.{gene.end - 2155167 + 1}"
 
 
+def test_upstream_positions_skip_c_zero(loader, calculator):
+    gene = loader.get_gene_info("katG")
+    display = tables.prepare_coordinates_data(
+        loader.search_mutations_by_gene("katG"), gene, calculator
+    )
+    # katG_c.-1T>C sits one base past the gene end on the minus strand
+    row = display[display["variant"] == "katG_c.-1T>C"].iloc[0]
+    assert row["position_value"] == gene.end + 1
+    assert row["Gene Relative"] == "c.-1"
+
+
 # ----------------------------------------------------------------------
 # TASK-14: summary tables
 # ----------------------------------------------------------------------
