@@ -168,6 +168,23 @@ def test_text_index_is_sorted_with_valid_offsets(tracks):
             assert offset == 0 or raw[offset - 1:offset] == b"\n"
 
 
+def test_aliased_variant_carries_its_alias(tracks):
+    """#5: a fabG1 promoter variant filed under inhA shows its fabG1 name."""
+    features = _features(tracks, f"{browser_tracks.VARIANT_TRACKS['assoc']}.gff3.gz")
+    fields = next(f for f in features if _attributes(f)["ID"] == "inhA_c.-777C>T")
+    attributes = _attributes(fields)
+    assert urllib.parse.unquote(attributes["alias"]) == "fabG1_c.-15C>T"
+    assert attributes["gene"] == "inhA"
+    # Recorded with equivalent multi-base changes, so the span starts upstream.
+    assert int(fields[3]) <= 1673425 <= int(fields[4])
+
+
+def test_unaliased_variant_has_no_alias_attribute(tracks):
+    features = _features(tracks, f"{browser_tracks.VARIANT_TRACKS['assoc']}.gff3.gz")
+    fields = next(f for f in features if _attributes(f)["ID"] == "katG_p.Ser315Thr")
+    assert "alias" not in _attributes(fields)
+
+
 @pytest.mark.parametrize("term", ["katg", "rv1908c", "catalase-peroxidase"])
 def test_text_index_finds_genes(tracks, term):
     hits = _search(tracks, term)
@@ -179,6 +196,11 @@ def test_text_index_finds_variants_on_their_track(tracks):
     hits = _search(tracks, "katg_p.ser315thr")
     assert hits and hits[0][1] == browser_tracks.VARIANT_TRACKS["assoc"]
     assert hits[0][2] == "katG_p.Ser315Thr"
+
+
+def test_text_index_finds_variants_by_alias(tracks):
+    hits = _search(tracks, "fabg1_c.-15c>t")
+    assert hits and hits[0][2] == "inhA_c.-777C>T"
 
 
 # ----------------------------------------------------------------------

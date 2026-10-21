@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-10-21
+
+### Fixed
+- **fabG1 was reported as "not in the WHO catalogue"** although its promoter
+  and coding variants are (#5). The catalogue files them under inhA, which
+  shares fabG1's promoter, and keeps the fabG1 name as an alias in its
+  Comment column (`fabG1_c.-15C>T` is `inhA_c.-777C>T`). The fabG1 page now
+  says "Catalogued under inhA" and lists the seven aliased variants with
+  their gradings and links to them on the inhA page, instead of the
+  non-catalogue notice.
+
+### Added
+- Searching a variant by its alias (`fabG1_c.-15C>T`, `fabG1_L203L`) opens
+  the catalogue variant and says which name the catalogue uses.
+- Genome browser variant details show the alias, and the browser's search
+  box finds variants by it. The browser tracks are rebuilt on the next start.
+
 ## [1.5.1] - 2026-10-08
 
 ### Fixed

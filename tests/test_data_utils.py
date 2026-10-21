@@ -90,6 +90,58 @@ def test_non_catalogued_genes_are_detected(loader, token):
     assert not loader.is_gene_in_catalogue(loader.get_gene_info(token))
 
 
+# ----------------------------------------------------------------------
+# #5: variants catalogued under another gene
+# ----------------------------------------------------------------------
+def test_fabg1_variants_are_catalogued_as_inha_aliases(loader):
+    """fabG1 has no rows of its own; its variants are filed under inhA."""
+    fabg1 = loader.get_gene_info("fabG1")
+    assert not loader.is_gene_in_catalogue(fabg1)
+
+    aliases = {alias.alias: alias for alias in loader.get_aliases_for_gene(fabg1)}
+    assert set(aliases) == {
+        "fabG1_c.-8T>A", "fabG1_c.-8T>C", "fabG1_c.-8T>G", "fabG1_c.-15C>T",
+        "fabG1_c.-16A>G", "fabG1_c.-17G>T", "fabG1_p.Leu203Leu",
+    }
+    c15 = aliases["fabG1_c.-15C>T"]
+    assert (c15.gene, c15.variant) == ("inhA", "inhA_c.-777C>T")
+    assert ("Isoniazid", "1) Assoc w R") in c15.drugs
+    # The alias ends a sentence in the comment; its own full stops are kept.
+    assert aliases["fabG1_p.Leu203Leu"].variant == "inhA_c.-154G>A"
+
+
+def test_variant_aliases_are_in_genomic_order(loader):
+    variants = [alias.variant for alias in loader.get_variant_aliases()]
+    assert variants[0] == "inhA_c.-779G>T"
+    assert variants[-1] == "inhA_c.-154G>A"
+
+
+def test_catalogued_target_gene_has_no_aliases_of_its_own(loader):
+    assert loader.get_aliases_for_gene(loader.get_gene_info("inhA")) == []
+    assert loader.get_aliases_for_gene(loader.get_gene_info("katG")) == []
+
+
+@pytest.mark.parametrize("gene,mutation,expected", [
+    ("fabG1", "c.-15C>T", "inhA_c.-777C>T"),
+    ("Rv1483", "c.-15C>T", "inhA_c.-777C>T"),     # locus tag
+    ("fabg1", "c.-8t>c", "inhA_c.-770T>C"),        # case-insensitive
+    ("fabG1", "p.Leu203Leu", "inhA_c.-154G>A"),
+    ("fabG1", "Leu203Leu", "inhA_c.-154G>A"),      # without the "p." prefix
+])
+def test_variant_alias_resolution(loader, gene, mutation, expected):
+    assert loader.resolve_variant_alias(gene, mutation).variant == expected
+
+
+@pytest.mark.parametrize("gene,mutation", [
+    ("fabG1", "c.-777C>T"),   # the inhA numbering is not a fabG1 alias
+    ("inhA", "c.-15C>T"),
+    ("fabG1", None),
+    ("not_a_gene", "c.-15C>T"),
+])
+def test_unknown_variant_aliases_resolve_to_none(loader, gene, mutation):
+    assert loader.resolve_variant_alias(gene, mutation) is None
+
+
 def test_resistance_lookup_works_from_a_locus_tag(loader):
     """A locus-tag search must reach rows the catalogue files under a symbol."""
     by_locus = loader.get_drug_resistance_info("Rv1908c")

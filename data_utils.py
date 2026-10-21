@@ -39,6 +39,13 @@ RELAXED_THRESHOLDS_COLUMN = (
 # First-line drugs are listed before the rest in the Browse by Drug module.
 FIRST_LINE_DRUGS = ("Isoniazid", "Rifampicin", "Pyrazinamide", "Ethambutol")
 
+# The catalogue files some variants under a neighbouring gene and keeps their
+# other name in the Comment column: fabG1 and inhA share one promoter, so
+# fabG1_c.-15C>T is catalogued as inhA_c.-777C>T with "Alias fabG1_c.-15C>T".
+# The trailing lookahead drops the full stop that ends the sentence without
+# cutting mutations such as "p.Leu203Leu".
+ALIAS_COMMENT_REGEX = re.compile(r"\bAlias\s+([A-Za-z0-9]+_\S+?)(?=[.,;]?(?:\s|$))")
+
 
 @dataclass
 class GeneInfo:
@@ -69,6 +76,18 @@ class GeneInfo:
     @property
     def is_protein_coding(self) -> bool:
         return self.biotype == "protein_coding"
+
+
+@dataclass
+class CatalogueAlias:
+    """A catalogue variant that the WHO also names after another gene."""
+    alias: str            # e.g. "fabG1_c.-15C>T"
+    alias_gene: str       # e.g. "fabG1"
+    alias_mutation: str   # e.g. "c.-15C>T"
+    variant: str          # catalogue identifier, e.g. "inhA_c.-777C>T"
+    gene: str             # catalogue gene, e.g. "inhA"
+    mutation: str         # catalogue mutation, e.g. "c.-777C>T"
+    drugs: List[Tuple[str, str]]  # (drug, final confidence grading)
 
 
 @dataclass
@@ -135,6 +154,7 @@ class DataLoader:
 
         # Catalogue lookups, built lazily from the master file.
         self._catalogue_alias_map: Optional[Dict[str, str]] = None
+        self._variant_aliases: Optional[List[CatalogueAlias]] = None
         self._fasta = None
 
     # ------------------------------------------------------------------
@@ -423,6 +443,75 @@ class DataLoader:
             self.resolve_catalogue_gene(gene_info.locus_tag)
             or self.resolve_catalogue_gene(gene_info.gene_name)
         )
+
+    def get_variant_aliases(self) -> List[CatalogueAlias]:
+        """
+        Catalogue variants that carry an alias in another gene, in genomic order.
+
+        Read from the "Alias ..." notes of the Comment column, so the list
+        follows the catalogue rather than a hand-maintained table.
+        """
+        if self._variant_aliases is not None:
+            return self._variant_aliases
+
+        catalogue = self.load_catalogue()
+        if "Comment" not in catalogue.columns:
+            self._variant_aliases = []
+            return self._variant_aliases
+
+        rows = catalogue.assign(
+            alias=catalogue["Comment"].str.extract(ALIAS_COMMENT_REGEX, expand=False)
+        ).dropna(subset=["alias", "variant"])
+
+        found = []
+        for (alias, variant), group in rows.groupby(["alias", "variant"], sort=False):
+            alias_gene, alias_mutation = alias.split("_", 1)
+            first = group.iloc[0]
+            position = pd.to_numeric(first.get("genomic position"), errors="coerce")
+            found.append((position, CatalogueAlias(
+                alias=alias,
+                alias_gene=alias_gene,
+                alias_mutation=alias_mutation,
+                variant=variant,
+                gene=first["gene"],
+                mutation=first["mutation"],
+                drugs=list(zip(
+                    group["drug"].fillna(""),
+                    group["FINAL CONFIDENCE GRADING"].fillna(""),
+                )),
+            )))
+
+        found.sort(key=lambda item: (pd.isna(item[0]), item[0] if pd.notna(item[0]) else 0))
+        self._variant_aliases = [alias for _, alias in found]
+        return self._variant_aliases
+
+    def get_aliases_for_gene(self, gene_info: GeneInfo) -> List[CatalogueAlias]:
+        """Catalogue variants named after this gene but filed under another."""
+        if gene_info is None:
+            return []
+        aliases = []
+        for alias in self.get_variant_aliases():
+            alias_gene = self.get_gene_info(alias.alias_gene)
+            if alias_gene is not None and alias_gene.locus_tag == gene_info.locus_tag:
+                aliases.append(alias)
+        return aliases
+
+    def resolve_variant_alias(
+        self, gene_token: str, mutation: Optional[str]
+    ) -> Optional[CatalogueAlias]:
+        """The catalogue variant a gene/mutation pair is an alias of, if any."""
+        gene_info = self.get_gene_info(gene_token) if gene_token else None
+        if gene_info is None or not mutation:
+            return None
+
+        def bare(value: str) -> str:
+            return re.sub(r"^[pcn]\.", "", str(value).strip().lower())
+
+        wanted = bare(mutation)
+        for alias in self.get_aliases_for_gene(gene_info):
+            if bare(alias.alias_mutation) == wanted:
+                return alias
+        return None
 
     def get_drug_resistance_info(
         self, gene_name: str, mutation: Optional[str] = None

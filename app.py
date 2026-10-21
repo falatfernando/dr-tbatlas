@@ -160,7 +160,8 @@ def toggle_cite_modal(header_clicks, footer_clicks, close_clicks):
     [Input("search-form", "n_submit"),
      Input({"type": "quick-search", "index": ALL}, "n_clicks"),
      Input({"type": "gene-link", "drug": ALL, "index": ALL}, "n_clicks"),
-     Input({"type": "neighbor-link", "index": ALL}, "n_clicks")],
+     Input({"type": "neighbor-link", "index": ALL}, "n_clicks"),
+     Input({"type": "catalogue-link", "index": ALL}, "n_clicks")],
     State("search-input", "value"),
     prevent_initial_call=True,
 )
@@ -169,14 +170,15 @@ def route_query(
     quick_clicks,
     gene_link_clicks,
     neighbor_clicks,
+    catalogue_clicks,
     search_value,
 ):
     """
     Resolve a query from any entry point into the active gene.
 
     Handles the search form (submitted with the button or the Enter key,
-    TASK-01), the quick-access pills, the Browse by Drug chips and the
-    neighbour shortcuts (TASK-10).
+    TASK-01), the quick-access pills, the Browse by Drug chips, the
+    neighbour shortcuts (TASK-10) and the links of the aliased-gene card.
     """
     triggered = callback_context.triggered_id
     if triggered is None:
@@ -184,13 +186,14 @@ def route_query(
 
     # Clicks elsewhere in the interface carry their target in the component id:
     # the Browse by Drug chips and neighbour shortcuts carry a locus tag, while
-    # a quick-access pill carries a query, which may be a full variant.
+    # a quick-access pill or catalogue link carries a query, which may be a
+    # full variant.
     if isinstance(triggered, dict):
         if not _triggered_click_value():
             raise PreventUpdate
 
         token = triggered.get("index")
-        if triggered.get("type") == "quick-search":
+        if triggered.get("type") in ("quick-search", "catalogue-link"):
             parsed = search_utils.parse_query(
                 token, gene_resolver=data_loader.is_known_gene
             )
@@ -228,11 +231,21 @@ def _navigate(token: Optional[str], mutation: Optional[str] = None, query: Optio
         else:
             return dash.no_update, ui.gene_not_found_alert(query or token or ""), dash.no_update
 
+    # A variant may be catalogued under another gene, e.g. fabG1_c.-15C>T as
+    # inhA_c.-777C>T (#5); its own gene's rows win if it has any.
+    feedback = None
+    if mutation and len(data_loader.get_drug_resistance_info(gene_info.locus_tag, mutation)) == 0:
+        alias = data_loader.resolve_variant_alias(gene_info.locus_tag, mutation)
+        if alias is not None:
+            gene_info = data_loader.get_gene_info(alias.gene) or gene_info
+            mutation = alias.mutation
+            feedback = ui.catalogue_alias_notice(alias)
+
     nav = {"locus_tag": gene_info.locus_tag, "mutation": mutation}
     display_query = (
         f"{gene_info.display_name}_{mutation}" if mutation else gene_info.display_name
     )
-    return nav, None, display_query
+    return nav, feedback, display_query
 
 
 # ----------------------------------------------------------------------
@@ -276,7 +289,16 @@ def render_gene(nav: Optional[Dict]):
         "in_catalogue": in_catalogue,
     }
 
-    results: List = [_gene_overview_card(gene_info, in_catalogue)]
+    # Variants catalogued under another gene but named after this one (#5).
+    aliases = [] if in_catalogue else data_loader.get_aliases_for_gene(gene_info)
+    alias_genes = [
+        target for target in (
+            data_loader.get_gene_info(gene)
+            for gene in dict.fromkeys(alias.gene for alias in aliases)
+        ) if target is not None
+    ]
+
+    results: List = [_gene_overview_card(gene_info, in_catalogue, alias_genes)]
 
     # Embedded JBrowse view: the genome explorer.
     results.append(genome_view.jbrowse_card(
@@ -286,8 +308,12 @@ def render_gene(nav: Optional[Dict]):
 
     if not in_catalogue:
         # Annotated but not catalogued: no resistance or coordinate tables
-        # would have anything to show (TASK-05).
-        results.append(ui.non_catalogue_card(gene_info))
+        # would have anything to show (TASK-05), but the variants the
+        # catalogue files under another gene are listed with links to it.
+        if aliases:
+            results.append(ui.aliased_catalogue_card(gene_info, aliases, alias_genes))
+        else:
+            results.append(ui.non_catalogue_card(gene_info))
         return results, gene_data, None
 
     drug_resistance = data_loader.get_drug_resistance_info(gene_info.locus_tag)
@@ -317,7 +343,9 @@ def render_gene(nav: Optional[Dict]):
     return results, gene_data, initial_selection
 
 
-def _gene_overview_card(gene_info: GeneInfo, in_catalogue: bool) -> dbc.Card:
+def _gene_overview_card(
+    gene_info: GeneInfo, in_catalogue: bool, alias_genes: Optional[List[GeneInfo]] = None
+) -> dbc.Card:
     """Gene overview header card, including protein length (TASK-06)."""
     previous_gene, next_gene = data_loader.get_neighbor_genes(gene_info)
 
@@ -341,10 +369,7 @@ def _gene_overview_card(gene_info: GeneInfo, in_catalogue: bool) -> dbc.Card:
                 dbc.Col([
                     html.H4(gene_info.display_name, className="mb-0 fw-bold text-primary"),
                     html.Small(f"Locus: {gene_info.locus_tag}", className="text-muted"),
-                    dbc.Badge(
-                        "In WHO catalogue" if in_catalogue else "Not in WHO catalogue",
-                        className=("badge-tb ms-2" if in_catalogue else "badge-muted ms-2"),
-                    ),
+                    _catalogue_badge(in_catalogue, alias_genes),
                 ], md=7),
                 dbc.Col([
                     html.Div([
@@ -388,6 +413,19 @@ def _gene_overview_card(gene_info: GeneInfo, in_catalogue: bool) -> dbc.Card:
             ]) if gene_info.note else None,
         ]),
     ], className="result-card")
+
+
+def _catalogue_badge(in_catalogue: bool, alias_genes: Optional[List[GeneInfo]]) -> dbc.Badge:
+    if in_catalogue:
+        return dbc.Badge("In WHO catalogue", className="badge-tb ms-2")
+    if alias_genes:
+        names = ", ".join(gene.display_name for gene in alias_genes)
+        return dbc.Badge(
+            f"Catalogued under {names}",
+            className="badge-tb ms-2",
+            title=f"The WHO catalogue lists this gene's variants as {names} variants",
+        )
+    return dbc.Badge("Not in WHO catalogue", className="badge-muted ms-2")
 
 
 def _overview_field(label: str, value: str, width: int = 3) -> dbc.Col:
