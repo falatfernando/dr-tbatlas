@@ -10,10 +10,10 @@ from typing import Dict, List, Optional
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from data_utils import FIRST_LINE_DRUGS, GeneInfo
+from data_utils import FIRST_LINE_DRUGS, CatalogueAlias, GeneInfo
 
 APP_NAME = "DR-TBAtlas"
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 
 # --- Institutional identity -------------------------------------------------
 LAPAM_NAME = "Laboratory of Applied Research in Mycobacteria (LaPAM)"
@@ -409,6 +409,116 @@ def non_catalogue_card(gene_info: GeneInfo) -> dbc.Card:
             ], className="text-muted small mb-0"),
         ]),
     ], className="result-card info-card")
+
+
+def aliased_catalogue_card(
+    gene_info: GeneInfo, aliases: List[CatalogueAlias], target_genes: List[GeneInfo]
+) -> dbc.Card:
+    """
+    Status card for a gene whose variants the catalogue files under another.
+
+    fabG1 has no rows of its own, but its promoter and coding variants are
+    catalogued as inhA variants with the fabG1 name kept as an alias (#5), so
+    "not in the catalogue" would misrepresent it.
+    """
+    name = gene_info.display_name
+    target_names = ", ".join(gene.display_name for gene in target_genes)
+    target_labels = _comma_separated([
+        html.Span([
+            html.Strong(gene.display_name),
+            f" ({gene.locus_tag})" if gene.locus_tag != gene.display_name else "",
+        ])
+        for gene in target_genes
+    ])
+    target_links = _comma_separated([
+        dbc.Button(
+            gene.display_name,
+            id={"type": "catalogue-link", "index": gene.locus_tag},
+            color="link",
+            size="sm",
+            className="p-0 align-baseline",
+        )
+        for gene in target_genes
+    ])
+
+    rows = []
+    for alias in aliases:
+        rows.append(html.Tr([
+            html.Td(html.Code(alias.alias)),
+            html.Td(dbc.Button(
+                alias.variant,
+                id={"type": "catalogue-link", "index": alias.variant},
+                color="link",
+                size="sm",
+                className="p-0 text-decoration-none font-monospace",
+                title=f"Open {alias.variant} in the {alias.gene} Drug Resistance Profile",
+            )),
+            html.Td([
+                dbc.Badge(
+                    f"{drug}: {grading}",
+                    className=(
+                        "badge-tb me-1" if grading.startswith(("1)", "2)")) else "badge-custom me-1"
+                    ),
+                )
+                for drug, grading in alias.drugs
+            ]),
+        ]))
+
+    return dbc.Card([
+        dbc.CardHeader([
+            html.H5(
+                [html.I(className="bi bi-link-45deg me-2"), f"Catalogued under {target_names}"],
+                className="card-header-title",
+            )
+        ], className="card-header-custom"),
+        dbc.CardBody([
+            html.P([
+                html.Strong(f"{name} ({gene_info.locus_tag})"),
+                " has no entries of its own in the WHO catalogue of drug "
+                f"resistance-associated mutations, but {len(aliases)} catalogued "
+                f"{'variant lies' if len(aliases) == 1 else 'variants lie'} in this gene "
+                "or its promoter. The catalogue files them under ",
+                *target_labels,
+                f" and records the {name} name as an alias, so their positions are "
+                f"counted from the {target_names} start codon.",
+            ], className="mb-3"),
+            dbc.Table([
+                html.Thead(html.Tr([
+                    html.Th(f"{name} name"),
+                    html.Th("WHO catalogue variant"),
+                    html.Th("Final confidence grading"),
+                ])),
+                html.Tbody(rows),
+            ], size="sm", hover=True, responsive=True, className="mb-3 small"),
+            html.P([
+                "Select a catalogue variant to open its drug resistance and coordinate "
+                "details, or go to ",
+                *target_links,
+                f" for every catalogued {target_names} variant.",
+            ], className="text-muted small mb-0"),
+        ]),
+    ], className="result-card info-card")
+
+
+def _comma_separated(components: List) -> List:
+    """Interleave components with ", " for inline display."""
+    joined: List = []
+    for i, component in enumerate(components):
+        if i:
+            joined.append(", ")
+        joined.append(component)
+    return joined
+
+
+def catalogue_alias_notice(alias: CatalogueAlias) -> dbc.Alert:
+    """Shown when a search names a variant by its alias (#5)."""
+    return dbc.Alert([
+        html.I(className="bi bi-info-circle-fill me-2"),
+        html.Code(alias.alias),
+        " is listed in the WHO catalogue as ",
+        html.Code(alias.variant),
+        ".",
+    ], color="info", className="rounded-3 shadow-sm mb-0 text-start")
 
 
 def browse_by_drug_modal(drug_map: Dict[str, List[Dict]]) -> dbc.Modal:

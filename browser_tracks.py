@@ -35,7 +35,7 @@ ASSEMBLY_NAME = "H37Rv NC_000962.3"
 TRACKS_DIRNAME = "tracks"
 # Bump when the content of the generated files changes, so existing
 # installations rebuild them on the next start.
-TRACKS_FORMAT_VERSION = 1
+TRACKS_FORMAT_VERSION = 2
 DATA_URL = "/data"
 
 MYCOBROWSER_GENE_URL = "https://mycobrowser.epfl.ch/genes/{locus_tag}"
@@ -332,6 +332,11 @@ class BrowserTracks:
 
         variants = spans.join(per_variant, how="inner").reset_index()
         variants["drugs"] = variants["variant"].map(per_drug)
+        # Names the catalogue also gives a variant, e.g. fabG1_c.-15C>T (#5).
+        aliases: Dict[str, List[str]] = defaultdict(list)
+        for alias in loader.get_variant_aliases():
+            aliases[alias.variant].append(alias.alias)
+        variants["aliases"] = variants["variant"].map(lambda v: aliases.get(v, []))
         variants["strand"] = variants["gene"].map(self._gene_strand)
         self._variants = variants.sort_values(["chromosome", "start"]).reset_index(drop=True)
         return self._variants
@@ -351,6 +356,7 @@ class BrowserTracks:
             # A bare "LoF" or "deletion" label says nothing out of context.
             ("Name", row.mutation if row.mutation.startswith(("p.", "c.", "n.")) else row.variant),
             ("variant", row.variant),
+            ("alias", row.aliases or None),
             ("gene", row.gene),
             ("locus_tag", gene_info.locus_tag if gene_info else None),
             ("grade_group", group),
@@ -495,6 +501,8 @@ class BrowserTracks:
             loc = f"{row.chromosome}:{max(1, row.start - 30)}..{row.end + 30}"
             doc = record(loc, _GROUP_TRACK[row.grade_group], row.variant, GRADE_LABELS[row.grade_group])
             add(row.variant, doc)
+            for alias in row.aliases:
+                add(alias, doc)
 
         index_lines = [f"{term} {' '.join(docs)}\n" for term, docs in sorted(terms.items())]
 
